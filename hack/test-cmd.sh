@@ -132,41 +132,42 @@ for version in "${kube_api_versions[@]}"; do
 
   kube::log::status "Testing kubectl(${version}:pods)"
   kubectl get pods "${kube_flags[@]}"
-  kubectl create -f examples/guestbook/redis-master.json "${kube_flags[@]}"
+  kubectl create -f examples/limitrange/valid-pod.json "${kube_flags[@]}"
   kubectl get pods "${kube_flags[@]}"
-  kubectl get pod redis-master "${kube_flags[@]}"
-  [ "$(kubectl get pod redis-master -o template --output-version=v1beta1 -t '{{ .id }}' "${kube_flags[@]}")" == "redis-master" ]
-  output_pod=$(kubectl get pod redis-master -o yaml --output-version=v1beta1 "${kube_flags[@]}")
-  kubectl delete pod redis-master "${kube_flags[@]}"
+  kubectl get pod valid-pod "${kube_flags[@]}"
+  [ "$(kubectl get pod valid-pod -o template --output-version=v1beta1 -t '{{ .id }}' "${kube_flags[@]}")" == "valid-pod" ]
+  output_pod=$(kubectl get pod valid-pod -o yaml --output-version=v1beta1 "${kube_flags[@]}")
+  kubectl delete pod valid-pod "${kube_flags[@]}"
   before="$(kubectl get pods -o template -t "{{ len .items }}" "${kube_flags[@]}")"
   echo "${output_pod}" | kubectl create -f - "${kube_flags[@]}"
   after="$(kubectl get pods -o template -t "{{ len .items }}" "${kube_flags[@]}")"
   [ "$((${after} - ${before}))" -eq 1 ]
-  kubectl get pods -o yaml --output-version=v1beta1 "${kube_flags[@]}" | grep -q "id: redis-master"
-  kubectl describe pod redis-master "${kube_flags[@]}" | grep -q 'Name:.*redis-master'
-  kubectl delete -f examples/guestbook/redis-master.json "${kube_flags[@]}"
-  kubectl delete pods -l name=redis-master "${kube_flags[@]}"
-  [ ! $(kubectl get pods "${kube_flags[@]}" -lname=redis-master | grep -q 'redis-master') ]
-  kubectl create -f examples/guestbook/redis-master.json "${kube_flags[@]}"
-  kubectl get pods "${kube_flags[@]}" -lname=redis-master | grep -q 'redis-master'
+  kubectl get pods -o yaml --output-version=v1beta1 "${kube_flags[@]}" | grep -q "id: valid-pod"
+  kubectl describe pod valid-pod "${kube_flags[@]}" | grep -q 'Name:.*valid-pod'
+  kubectl delete -f examples/limitrange/valid-pod.json "${kube_flags[@]}"
+  
+  kubectl delete pods -l name=valid-pod "${kube_flags[@]}"
+  [ ! $(kubectl get pods "${kube_flags[@]}" -lname=valid-pod | grep -q 'valid-pod') ]
+  kubectl create -f examples/limitrange/valid-pod.json "${kube_flags[@]}"
+  kubectl get pods "${kube_flags[@]}" -lname=valid-pod | grep -q 'valid-pod'
   [ ! $(kubectl delete pods "${kube_flags[@]}" ) ]
-  kubectl get pods "${kube_flags[@]}" -lname=redis-master | grep -q 'redis-master'
-  [ ! $(delete pods --all pods -l name=redis-master) ]   # not --all and label selector together
+  kubectl get pods "${kube_flags[@]}" -lname=valid-pod | grep -q 'valid-pod'
+  [ ! $(delete pods --all pods -l name=valid-pod) ]   # not --all and label selector together
   kubectl delete --all pods "${kube_flags[@]}" # --all remove all the pods
   howmanypods="$(kubectl get pods  -o template -t "{{ len .items }}" "${kube_flags[@]}")"
   [ "$howmanypods" -eq 0 ]
 
   # make calls in another namespace
-  kubectl create --namespace=other -f examples/guestbook/redis-master.json "${kube_flags[@]}"
-  kubectl get pod --namespace=other redis-master
-  kubectl delete pod --namespace=other redis-master
+  kubectl create --namespace=other -f examples/limitrange/valid-pod.json "${kube_flags[@]}"
+  kubectl get pod --namespace=other valid-pod
+  kubectl delete pod --namespace=other valid-pod
 
   kube::log::status "Testing kubectl(${version}:services)"
   kubectl get services "${kube_flags[@]}"
-  kubectl create -f examples/guestbook/frontend-service.json "${kube_flags[@]}"
+  kubectl create -f examples/guestbook/redis-master-service.json "${kube_flags[@]}"
   kubectl get services "${kube_flags[@]}"
-  output_service=$(kubectl get service frontend -o json --output-version=v1beta3 "${kube_flags[@]}")
-  kubectl delete service frontend "${kube_flags[@]}"
+  output_service=$(kubectl get service redis-master -o json --output-version=v1beta3 "${kube_flags[@]}")
+  kubectl delete service redis-master "${kube_flags[@]}"
   echo "${output_service}" | kubectl create -f - "${kube_flags[@]}"
   kubectl create -f - "${kube_flags[@]}" << __EOF__
       {
@@ -184,7 +185,7 @@ __EOF__
   kubectl get service service-${version}-test -o json | kubectl update -f -
   kubectl get services "${kube_flags[@]}"
   kubectl get services "service-${version}-test" "${kube_flags[@]}"
-  kubectl delete service frontend "${kube_flags[@]}"
+  kubectl delete service redis-master "${kube_flags[@]}"
 
   kube::log::status "Testing kubectl(${version}:replicationcontrollers)"
   kubectl get replicationcontrollers "${kube_flags[@]}"
