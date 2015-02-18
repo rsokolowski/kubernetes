@@ -35,6 +35,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/leaky"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/types"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	"github.com/davecgh/go-spew/spew"
 	docker "github.com/fsouza/go-dockerclient"
 	"github.com/golang/glog"
 )
@@ -561,9 +562,21 @@ func GetDockerPodInfo(client DockerInterface, manifest api.PodSpec, podFullName 
 
 const containerNamePrefix = "k8s"
 
+type Logger string
+
+func (logger *Logger) Write(p []byte) (n int, err error) {
+  glog.Info("added bytes: ", p)
+  return len(p), nil
+}
+
 func HashContainer(container *api.Container) uint64 {
+	glog.Info("Hashing container: ", container)
+	var b Logger
+	spew.Fprintf(&b, "%#v", *container)
 	hash := adler32.New()
+	glog.Info("Start hash: ", hash.Sum32())
 	util.DeepHashObject(hash, *container)
+	glog.Info("Sum32: ", hash.Sum32())
 	return uint64(hash.Sum32())
 }
 

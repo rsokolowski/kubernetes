@@ -152,6 +152,7 @@ type Kubelet struct {
 	podWorkers             *podWorkers
 	resyncInterval         time.Duration
 	pods                   []api.BoundPod
+	podsLock               sync.RWMutex
 	sourceReady            SourceReadyFn
 
 	// Needed to report events for containers belonging to deleted/modified pods.
@@ -1042,13 +1043,15 @@ func (kl *Kubelet) syncPod(pod *api.BoundPod, dockerContainers dockertools.Docke
 		return err
 	}
 
-	podStatus, err := kl.GetPodStatus(podFullName, uid)
+	podStatus, err := kl.getPodStatusNoLock(podFullName, uid)
 	if err != nil {
 		glog.Errorf("Unable to get pod with name %q and uid %q info with error(%v)", podFullName, uid, err)
 	}
 
 	for _, container := range pod.Spec.Containers {
+		glog.Warningf("Just about to hash a container: %#v", container)
 		expectedHash := dockertools.HashContainer(&container)
+		glog.Warningf("Expected hash is %d for container: %#v", expectedHash, container)
 		dockerContainerName := dockertools.BuildDockerName(uid, podFullName, &container)
 		if dockerContainer, found, hash := dockerContainers.FindPodContainer(podFullName, uid, container.Name); found {
 			containerID := dockertools.DockerID(dockerContainer.ID)
@@ -1382,6 +1385,24 @@ func filterHostPortConflicts(pods []api.BoundPod) []api.BoundPod {
 	return filtered
 }
 
+func (kl *Kubelet) updatePod(u PodUpdate) {
+	kl.podsLock.Lock()
+	defer kl.podsLock.Unlock()
+	switch u.Op {
+	case SET:
+		glog.V(3).Infof("SET: Containers changed")
+		kl.pods = u.Pods
+		kl.pods = filterHostPortConflicts(kl.pods)
+	case UPDATE:
+		glog.V(3).Infof("Update: Containers changed")
+		kl.pods = updateBoundPods(u.Pods, kl.pods)
+		kl.pods = filterHostPortConflicts(kl.pods)
+
+	default:
+		panic("syncLoop does not support incremental changes")
+	}
+}
+
 // syncLoop is the main loop for processing changes. It watches for changes from
 // four channels (file, etcd, server, and http) and creates a union of them. For
 // any new change seen, will run a sync against desired state and running state. If
@@ -1391,24 +1412,13 @@ func (kl *Kubelet) syncLoop(updates <-chan PodUpdate, handler SyncHandler) {
 	for {
 		select {
 		case u := <-updates:
-			switch u.Op {
-			case SET:
-				glog.V(3).Infof("SET: Containers changed")
-				kl.pods = u.Pods
-				kl.pods = filterHostPortConflicts(kl.pods)
-			case UPDATE:
-				glog.V(3).Infof("Update: Containers changed")
-				kl.pods = updateBoundPods(u.Pods, kl.pods)
-				kl.pods = filterHostPortConflicts(kl.pods)
-
-			default:
-				panic("syncLoop does not support incremental changes")
-			}
+			kl.updatePod(u)
 		case <-time.After(kl.resyncInterval):
 			glog.V(4).Infof("Periodic sync")
 		}
 
-		err := handler.SyncPods(kl.pods)
+		pods_copy, _ := kl.GetBoundPods()
+		err := handler.SyncPods(pods_copy)
 		if err != nil {
 			glog.Errorf("Couldn't sync containers: %v", err)
 		}
@@ -1463,19 +1473,25 @@ func (kl *Kubelet) GetKubeletContainerLogs(podFullName, containerName, tail stri
 
 // GetBoundPods returns all pods bound to the kubelet and their spec
 func (kl *Kubelet) GetBoundPods() ([]api.BoundPod, error) {
-	return kl.pods, nil
+	kl.podsLock.RLock()
+	defer kl.podsLock.RUnlock()
+	var result []api.BoundPod
+	copy(kl.pods, result)
+	return result, nil
 }
 
 // GetPodFullName provides the first pod that matches namespace and name, or false
 // if no such pod can be found.
-func (kl *Kubelet) GetPodByName(namespace, name string) (*api.BoundPod, bool) {
+func (kl *Kubelet) GetPodByName(namespace, name string) (api.BoundPod, bool) {
+	kl.podsLock.RLock()
+	defer kl.podsLock.RUnlock()
 	for i := range kl.pods {
 		pod := &kl.pods[i]
 		if pod.Namespace == namespace && pod.Name == name {
-			return pod, true
+			return *pod, true
 		}
 	}
-	return nil, false
+	return api.BoundPod{}, false
 }
 
 // getPhase returns the phase of a pod given its container info.
@@ -1566,7 +1582,7 @@ func getPodReadyCondition(spec *api.PodSpec, info api.PodInfo) []api.PodConditio
 }
 
 // GetPodStatus returns information from Docker about the containers in a pod
-func (kl *Kubelet) GetPodStatus(podFullName string, uid types.UID) (api.PodStatus, error) {
+func (kl *Kubelet) getPodStatusNoLock(podFullName string, uid types.UID) (api.PodStatus, error) {
 	var spec api.PodSpec
 	var podStatus api.PodStatus
 	found := false
@@ -1614,6 +1630,12 @@ func (kl *Kubelet) GetPodStatus(podFullName string, uid types.UID) (api.PodStatu
 	podStatus.Info = info
 
 	return podStatus, nil
+}
+
+func (kl *Kubelet) GetPodStatus(podFullName string, uid types.UID) (api.PodStatus, error) {
+	kl.podsLock.RLock()
+	defer kl.podsLock.RUnlock()
+	return kl.getPodStatusNoLock(podFullName, uid)
 }
 
 // Returns logs of current machine.
